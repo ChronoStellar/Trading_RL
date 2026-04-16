@@ -1,0 +1,152 @@
+"""
+env/train_env.py
+Custom Gymnasium environment for single-asset (SPY) continuous position sizing.
+
+State space  (8-d):  6 market features (pre-normalized) + current_position + unrealized_pnl
+Action space (1-d):  continuous allocation in [0, 1]
+Episode length:      252 trading days, random start within the split
+"""
+
+import os
+
+import gymnasium as gym
+import numpy as np
+import pandas as pd
+from gymnasium import spaces
+
+from env.rewards import sharpe_step_reward
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+EPISODE_LEN   = 252          # trading days per episode
+INITIAL_CASH  = 100_000.0   # simulated starting capital
+FEATURE_COLS  = ["ret_1d", "ret_5d", "rsi_14", "sma_ratio", "vol_20d", "vol_ratio"]
+PROC_DIR      = os.path.join(os.path.dirname(__file__), "..", "data", "processed")
+
+
+class TradingEnv(gym.Env):
+    """
+    Single-asset continuous allocation environment.
+
+    Parameters
+    ----------
+    ticker : str
+        Asset ticker (SPY / QQQ / IWM). Loads from data/processed/<ticker>/<split>.csv
+    split  : str
+        One of 'train', 'val', 'test'
+    seed   : int | None
+        RNG seed for reproducible episode start dates
+    """
+
+    metadata = {"render_modes": []}
+
+    def __init__(self, ticker: str = "SPY", split: str = "train", seed: int | None = None):
+        super().__init__()
+
+        csv_path = os.path.join(PROC_DIR, ticker, f"{split}.csv")
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(
+                f"{csv_path} not found. Run data/loader.py and data/features.py first."
+            )
+
+        df = pd.read_csv(csv_path)
+        self._features: np.ndarray = df[FEATURE_COLS].to_numpy(dtype=np.float32)
+        self._close:    np.ndarray = df["close"].to_numpy(dtype=np.float32)
+        self._n_rows = len(df)
+
+        # Spaces
+        # Obs: [ret_1d, ret_5d, rsi_14, sma_ratio, vol_20d, vol_ratio, position, unreal_pnl]
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
+        )
+        # Action: allocation fraction [0, 1]
+        self.action_space = spaces.Box(
+            low=np.array([0.0], dtype=np.float32),
+            high=np.array([1.0], dtype=np.float32),
+            dtype=np.float32,
+        )
+
+        self._rng = np.random.default_rng(seed)
+
+        # Episode state (set properly in reset)
+        self._start_idx:    int   = 0
+        self._current_step: int   = 0
+        self._position:     float = 0.0   # current allocation [0, 1]
+        self._entry_price:  float = 0.0   # price when position was last opened
+        self._portfolio_val:float = INITIAL_CASH
+        self._ret_history:  list  = []    # for rolling vol
+
+    # ── Gymnasium API ──────────────────────────────────────────────────────────
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        super().reset(seed=seed)
+        if seed is not None:
+            self._rng = np.random.default_rng(seed)
+
+        # Random start so that a full episode fits within the data
+        max_start = self._n_rows - EPISODE_LEN - 1
+        if max_start <= 0:
+            raise ValueError(
+                f"Split has only {self._n_rows} rows; need at least {EPISODE_LEN + 1}."
+            )
+        self._start_idx    = int(self._rng.integers(0, max_start + 1))
+        self._current_step = 0
+        self._position     = 0.0
+        self._entry_price  = float(self._close[self._start_idx])
+        self._portfolio_val= INITIAL_CASH
+        self._ret_history  = []
+
+        obs = self._get_obs()
+        return obs, {}
+
+    def step(self, action: np.ndarray):
+        action = np.clip(action, 0.0, 1.0)
+        new_position = float(action[0])
+        position_delta = new_position - self._position
+
+        idx = self._start_idx + self._current_step
+        current_price = float(self._close[idx])
+        next_price    = float(self._close[idx + 1])
+
+        # Portfolio return for this step
+        price_return   = (next_price / current_price) - 1.0
+        portfolio_return = self._position * price_return  # only invested fraction earns
+
+        # Update portfolio value
+        self._portfolio_val *= (1.0 + portfolio_return)
+
+        # Rolling volatility (20-day)
+        self._ret_history.append(portfolio_return)
+        if len(self._ret_history) > 20:
+            self._ret_history.pop(0)
+        rolling_vol = float(np.std(self._ret_history)) if len(self._ret_history) > 1 else 1e-4
+
+        reward = sharpe_step_reward(portfolio_return, rolling_vol, position_delta)
+
+        # Update position and entry price
+        if position_delta > 0 and self._position == 0.0:
+            self._entry_price = next_price  # opened a new position
+        self._position = new_position
+
+        self._current_step += 1
+        terminated = self._current_step >= EPISODE_LEN
+        truncated  = False
+
+        obs = self._get_obs()
+        info = {
+            "portfolio_value": self._portfolio_val,
+            "position":        self._position,
+            "price":           next_price,
+        }
+        return obs, reward, terminated, truncated, info
+
+    # ── Internal helpers ───────────────────────────────────────────────────────
+
+    def _get_obs(self) -> np.ndarray:
+        idx = self._start_idx + self._current_step
+        market_features = self._features[idx]  # shape (6,)
+
+        current_price = float(self._close[idx])
+        unrealized_pnl = (current_price / self._entry_price) - 1.0 if self._entry_price > 0 else 0.0
+
+        obs = np.append(market_features, [self._position, unrealized_pnl]).astype(np.float32)
+        return obs
