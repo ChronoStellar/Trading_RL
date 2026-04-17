@@ -26,15 +26,16 @@ MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 # ── Default hyperparameters (tune via CLI or edit here) ───────────────────────
 DEFAULTS = dict(
     timesteps  = 500_000,
-    n_envs     = 4,           # parallel envs for faster data collection
-    seed       = 0,
+    n_envs     = 8,           # parallel envs for faster data collection
+    seed       = 42,
+    device     = "cpu",      # "cpu" or "cuda" (GPU training can be faster but is optional)
     # PPO-specific
     n_steps    = 2048,        # steps per env before update
-    batch_size = 256,
-    n_epochs   = 10,
-    gamma      = 0.99,
+    batch_size = 512,
+    n_epochs   = 20,
+    gamma      = 0.995,
     gae_lambda = 0.95,
-    ent_coef   = 0.01,
+    ent_coef   = 0.005,
     learning_rate = 3e-4,
 )
 
@@ -65,6 +66,7 @@ def train(args: argparse.Namespace) -> None:
         gae_lambda    = args.gae_lambda,
         ent_coef      = args.ent_coef,
         learning_rate = args.learning_rate,
+        device        = args.device,
         verbose       = 1,
         seed          = args.seed,
     )
@@ -89,6 +91,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gae-lambda",   type=float, default=DEFAULTS["gae_lambda"])
     p.add_argument("--ent-coef",     type=float, default=DEFAULTS["ent_coef"])
     p.add_argument("--learning-rate",type=float, default=DEFAULTS["learning_rate"])
+    p.add_argument("--device",       type=str,   default=DEFAULTS["device"],
+                   choices=["mps", "cpu", "cuda"])
     return p.parse_args()
 
 

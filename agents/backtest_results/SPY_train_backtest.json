@@ -1,0 +1,21 @@
+{
+  "split": "train",
+  "ticker": "SPY",
+  "n_episodes": 5,
+  "agent_return_mean": 0.3329708212242615,
+  "agent_return_std": 0.2769088693325706,
+  "agent_sharpe_mean": 2.644468145709892,
+  "agent_sharpe_std": 1.0671625494651025,
+  "agent_dd_mean": -0.06967447717303289,
+  "agent_dd_std": 0.03674423402228327,
+  "agent_wr_mean": 0.5853094329880041,
+  "agent_wr_std": 0.02742023111112289,
+  "agent_position_mean": 0.6651264906993934,
+  "bnh_return": 0.2137533082484997,
+  "bnh_sharpe": 1.1987677170719202,
+  "bnh_dd": -0.15699625527301725,
+  "bnh_wr": 0.584,
+  "return_outperformance": 0.11921751297576183,
+  "sharpe_outperformance": 1.4457004286379718,
+  "dd_improvement": -0.08732177809998436
+}

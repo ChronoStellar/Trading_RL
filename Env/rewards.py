@@ -6,7 +6,7 @@ Reward function: per-step Sharpe contribution with transaction cost penalty.
 import numpy as np
 
 
-RISK_FREE_DAILY = 0.0  # annualized 0% for simplicity; swap in 0.05/252 if desired
+RISK_FREE_DAILY = 0.00001/252  # annualized 0% for simplicity; swap in 0.05/252 if desired
 TRANSACTION_COST = 0.001  # fraction of trade size charged per reallocation
 
 
