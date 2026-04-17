@@ -66,7 +66,7 @@ A single-asset reinforcement learning agent trained to manage continuous positio
 
 ### Framework
 - **Library:** FinRL or custom Gym environment
-- **Algorithm:** PPO (Proximal Policy Optimization) via Stable-Baselines3
+- **Algorithm:** Recurrent PPO (R-PPO) via Stable-Baselines3 — LSTM-augmented policy for temporal memory
 
 ### Action Space
 - **Type:** Continuous

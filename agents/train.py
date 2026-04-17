@@ -1,6 +1,6 @@
 """
 agents/train.py
-Train a PPO agent on TradingEnv (SPY train split) using Stable-Baselines3.
+Train a Recurrent PPO agent (LSTM policy) on TradingEnv (SPY train split) using Stable-Baselines3.
 Saves the trained model to agents/models/ppo_spy.zip.
 
 Usage:
@@ -15,9 +15,8 @@ import sys
 # Make project root importable regardless of cwd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import VecNormalize
 
 from env.train_env import TradingEnv
 
@@ -26,8 +25,9 @@ MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 # ── Default hyperparameters (tune via CLI or edit here) ───────────────────────
 DEFAULTS = dict(
     timesteps  = 500_000,
-    n_envs     = 4,           # parallel envs for faster data collection
+    n_envs     = 2,           # parallel envs for faster data collection
     seed       = 0,
+    device     = "mps",       # "mps" (Apple GPU), "cpu", or "cuda"
     # PPO-specific
     n_steps    = 2048,        # steps per env before update
     batch_size = 256,
@@ -55,8 +55,8 @@ def train(args: argparse.Namespace) -> None:
         seed=args.seed,
     )
 
-    model = PPO(
-        policy        = "MlpPolicy",
+    model = RecurrentPPO(
+        policy        = "MlpLstmPolicy",
         env           = vec_env,
         n_steps       = args.n_steps,
         batch_size    = args.batch_size,
@@ -65,6 +65,7 @@ def train(args: argparse.Namespace) -> None:
         gae_lambda    = args.gae_lambda,
         ent_coef      = args.ent_coef,
         learning_rate = args.learning_rate,
+        device        = args.device,
         verbose       = 1,
         seed          = args.seed,
     )
@@ -78,10 +79,12 @@ def train(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Train PPO on TradingEnv")
+    p = argparse.ArgumentParser(description="Train Recurrent PPO on TradingEnv")
     p.add_argument("--timesteps",    type=int,   default=DEFAULTS["timesteps"])
     p.add_argument("--n-envs",       type=int,   default=DEFAULTS["n_envs"])
     p.add_argument("--seed",         type=int,   default=DEFAULTS["seed"])
+    p.add_argument("--device",       type=str,   default=DEFAULTS["device"],
+                   choices=["mps", "cpu", "cuda"])
     p.add_argument("--n-steps",      type=int,   default=DEFAULTS["n_steps"])
     p.add_argument("--batch-size",   type=int,   default=DEFAULTS["batch_size"])
     p.add_argument("--n-epochs",     type=int,   default=DEFAULTS["n_epochs"])
