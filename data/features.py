@@ -3,13 +3,24 @@ data/features.py
 Compute derived features for each ticker, fit a scaler on the training split,
 apply it to all splits, and save the normalized CSVs + scaler JSON.
 
-Features (6 market features — features 7 & 8 are injected by the Gym env):
-  1. ret_1d       — 1-day return:  (close_t / close_t-1) - 1
-  2. ret_5d       — 5-day return:  (close_t / close_t-5) - 1
-  3. rsi_14       — RSI (14-period)
-  4. sma_ratio    — close / SMA_20
-  5. vol_20d      — rolling 20-day std of daily returns
-  6. vol_ratio    — volume / avg_volume_20d
+Market features (15 total — features 16 & 17 are injected by the Gym env):
+  ── Price / return ──────────────────────────────────────────────────────────
+  1.  ret_1d        — 1-day return:  (close_t / close_t-1) - 1
+  2.  ret_5d        — 5-day return:  (close_t / close_t-5) - 1
+  3.  sma_ratio     — close / SMA_20
+  4.  vol_20d       — rolling 20-day std of daily returns
+  5.  vol_ratio     — volume / avg_volume_20d
+  ── 7 day-trading indicators (via `ta` library) ─────────────────────────────
+  6.  rsi_14        — RSI (14-period, Wilder EWM)
+  7.  macd_hist     — MACD histogram normalised by close  (scale-free)
+  8.  stoch_k       — Stochastic %K (14-period)
+  9.  stoch_d       — Stochastic %D (3-period signal of %K)
+  10. bb_width      — Bollinger bandwidth: (upper - lower) / mid
+  11. bb_pct        — Bollinger %B: (close - lower) / (upper - lower)
+  12. obv_ret       — On-Balance Volume 1-day % change  (stationary proxy)
+  13. adx           — Average Directional Index (14-period)
+  14. adx_di_diff   — (+DI - -DI) / 100  — directional bias [-1, 1]
+  15. psar_bull     — 1.0 if PSAR uptrend (price > SAR), 0.0 if downtrend
 """
 
 import json
@@ -17,6 +28,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import ta
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 RAW_DIR      = os.path.join(os.path.dirname(__file__), "raw")
@@ -29,36 +41,82 @@ TRAIN_END = "2021-12-31"
 VAL_END   = "2023-12-31"
 # test is everything after VAL_END
 
-FEATURE_COLS = ["ret_1d", "ret_5d", "rsi_14", "sma_ratio", "vol_20d", "vol_ratio"]
+FEATURE_COLS = [
+    # original price/return features
+    "ret_1d", "ret_5d", "sma_ratio", "vol_20d", "vol_ratio",
+    # 7 day-trading indicators
+    "rsi_14",
+    "macd_hist",
+    "stoch_k", "stoch_d",
+    "bb_width", "bb_pct",
+    "obv_ret",
+    "adx", "adx_di_diff",
+    "psar_bull",
+]
 
 
 # ── Feature computation ────────────────────────────────────────────────────────
 
-def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain  = delta.clip(lower=0)
-    loss  = (-delta).clip(lower=0)
-    # Wilder's smoothing (equivalent to EWM with alpha=1/period, adjust=False)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
-
-
 def compute_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add feature columns to a single-ticker OHLCV DataFrame."""
+    """Add all 15 feature columns to a single-ticker OHLCV DataFrame."""
     df = df.copy()
-    df["ret_1d"]    = df["close"].pct_change(1)
-    df["ret_5d"]    = df["close"].pct_change(5)
-    df["rsi_14"]    = _rsi(df["close"], 14)
-    df["sma_20"]    = df["close"].rolling(20).mean()
-    df["sma_ratio"] = df["close"] / df["sma_20"]
-    df["vol_20d"]   = df["ret_1d"].rolling(20).std()
-    df["avg_vol_20"]= df["volume"].rolling(20).mean()
-    df["vol_ratio"] = df["volume"] / df["avg_vol_20"]
-    # Drop helper columns
-    df = df.drop(columns=["sma_20", "avg_vol_20"])
-    # Drop rows with NaN features (warmup period)
+
+    # ── 1–5: price / return features ──────────────────────────────────────────
+    df["ret_1d"]     = df["close"].pct_change(1)
+    df["ret_5d"]     = df["close"].pct_change(5)
+    sma20            = df["close"].rolling(20).mean()
+    df["sma_ratio"]  = df["close"] / sma20
+    df["vol_20d"]    = df["ret_1d"].rolling(20).std()
+    avg_vol20        = df["volume"].rolling(20).mean()
+    df["vol_ratio"]  = df["volume"] / avg_vol20
+
+    # ── 6: RSI (14) ───────────────────────────────────────────────────────────
+    df["rsi_14"] = ta.momentum.RSIIndicator(
+        close=df["close"], window=14
+    ).rsi()
+
+    # ── 7: MACD histogram (normalised by close to be scale-free) ─────────────
+    macd = ta.trend.MACD(
+        close=df["close"], window_slow=26, window_fast=12, window_sign=9
+    )
+    df["macd_hist"] = macd.macd_diff() / df["close"]
+
+    # ── 8–9: Stochastic Oscillator %K / %D ───────────────────────────────────
+    stoch = ta.momentum.StochasticOscillator(
+        high=df["high"], low=df["low"], close=df["close"],
+        window=14, smooth_window=3
+    )
+    df["stoch_k"] = stoch.stoch()
+    df["stoch_d"] = stoch.stoch_signal()
+
+    # ── 10–11: Bollinger Bands ────────────────────────────────────────────────
+    bb = ta.volatility.BollingerBands(
+        close=df["close"], window=20, window_dev=2
+    )
+    df["bb_width"] = bb.bollinger_wband()   # (upper - lower) / mid
+    df["bb_pct"]   = bb.bollinger_pband()   # (close - lower) / (upper - lower)
+
+    # ── 12: On-Balance Volume — 1-day % change (stationary) ──────────────────
+    obv            = ta.volume.OnBalanceVolumeIndicator(
+        close=df["close"], volume=df["volume"]
+    ).on_balance_volume()
+    df["obv_ret"]  = obv.pct_change(1).replace([np.inf, -np.inf], np.nan)
+
+    # ── 13–14: ADX + directional bias ────────────────────────────────────────
+    adx_ind         = ta.trend.ADXIndicator(
+        high=df["high"], low=df["low"], close=df["close"], window=14
+    )
+    df["adx"]        = adx_ind.adx()
+    df["adx_di_diff"]= (adx_ind.adx_pos() - adx_ind.adx_neg()) / 100.0
+
+    # ── 15: Parabolic SAR — binary uptrend flag ───────────────────────────────
+    psar            = ta.trend.PSARIndicator(
+        high=df["high"], low=df["low"], close=df["close"],
+        step=0.02, max_step=0.2
+    )
+    df["psar_bull"] = psar.psar_up().notna().astype(np.float32)
+
+    # Drop helper intermediates
     df = df.dropna(subset=FEATURE_COLS).reset_index(drop=True)
     return df
 

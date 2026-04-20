@@ -105,4 +105,4 @@ coverage/
 tmp/
 temp/
 
-test.ipynb
+.ipynb

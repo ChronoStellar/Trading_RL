@@ -1,0 +1,27 @@
+{
+  "run_at": "2026-04-20T13:59:40",
+  "ticker": "QQQ",
+  "split": "test",
+  "n_steps": 252,
+  "agent": {
+    "total_return": 0.126848,
+    "sharpe_ratio": 1.034096,
+    "max_drawdown": -0.083018,
+    "win_rate": 0.583756,
+    "avg_position": 0.497939,
+    "final_value": 112684.77
+  },
+  "buy_and_hold": {
+    "total_return": 0.288535,
+    "sharpe_ratio": 1.513654,
+    "max_drawdown": -0.135577,
+    "win_rate": 0.589641,
+    "avg_position": 1.0,
+    "final_value": 127490.04
+  },
+  "outperformance": {
+    "return": -0.161687,
+    "sharpe": -0.479558,
+    "drawdown_improvement": 0.052559
+  }
+}

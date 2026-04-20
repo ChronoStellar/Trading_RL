@@ -2,8 +2,8 @@
 env/train_env.py
 Custom Gymnasium environment for single-asset (SPY) continuous position sizing.
 
-State space  (8-d):  6 market features (pre-normalized) + current_position + unrealized_pnl
-Action space (1-d):  continuous allocation in [0, 1]
+State space  (17-d): 15 market features (pre-normalized) + current_position + unrealized_pnl
+Action space  (1-d): continuous allocation in [0, 1]
 Episode length:      252 trading days, random start within the split
 """
 
@@ -19,7 +19,16 @@ from env.rewards import sharpe_step_reward
 # ── Constants ──────────────────────────────────────────────────────────────────
 EPISODE_LEN   = 252          # trading days per episode
 INITIAL_CASH  = 100_000.0   # simulated starting capital
-FEATURE_COLS  = ["ret_1d", "ret_5d", "rsi_14", "sma_ratio", "vol_20d", "vol_ratio"]
+FEATURE_COLS  = [
+    "ret_1d", "ret_5d", "sma_ratio", "vol_20d", "vol_ratio",
+    "rsi_14",
+    "macd_hist",
+    "stoch_k", "stoch_d",
+    "bb_width", "bb_pct",
+    "obv_ret",
+    "adx", "adx_di_diff",
+    "psar_bull",
+]
 PROC_DIR      = os.path.join(os.path.dirname(__file__), "..", "data", "processed")
 
 
@@ -54,9 +63,10 @@ class TradingEnv(gym.Env):
         self._n_rows = len(df)
 
         # Spaces
-        # Obs: [ret_1d, ret_5d, rsi_14, sma_ratio, vol_20d, vol_ratio, position, unreal_pnl]
+        # Obs: 15 market features (z-scored) + position + unrealized_pnl = 17-d
+        _n_market = len(FEATURE_COLS)
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(_n_market + 2,), dtype=np.float32
         )
         # Action: allocation fraction [0, 1]
         self.action_space = spaces.Box(
@@ -143,7 +153,7 @@ class TradingEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         idx = self._start_idx + self._current_step
-        market_features = self._features[idx]  # shape (6,)
+        market_features = self._features[idx]  # shape (15,)
 
         current_price = float(self._close[idx])
         unrealized_pnl = (current_price / self._entry_price) - 1.0 if self._entry_price > 0 else 0.0

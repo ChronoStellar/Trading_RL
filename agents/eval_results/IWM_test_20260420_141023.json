@@ -1,0 +1,27 @@
+{
+  "run_at": "2026-04-20T14:10:23",
+  "ticker": "IWM",
+  "split": "test",
+  "n_steps": 252,
+  "agent": {
+    "total_return": 0.057289,
+    "sharpe_ratio": 0.515714,
+    "max_drawdown": -0.081211,
+    "win_rate": 0.525547,
+    "avg_position": 0.466494,
+    "final_value": 105728.91
+  },
+  "buy_and_hold": {
+    "total_return": 0.152118,
+    "sharpe_ratio": 0.794046,
+    "max_drawdown": -0.100712,
+    "win_rate": 0.525896,
+    "avg_position": 1.0,
+    "final_value": 112139.81
+  },
+  "outperformance": {
+    "return": -0.094829,
+    "sharpe": -0.278333,
+    "drawdown_improvement": 0.019502
+  }
+}
