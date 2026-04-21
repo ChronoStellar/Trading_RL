@@ -2,7 +2,7 @@
 env/train_env.py
 Custom Gymnasium environment for single-asset (SPY) continuous position sizing.
 
-State space  (17-d): 15 market features (pre-normalized) + current_position + unrealized_pnl
+State space  (17-d): 15 market features (pre-normalized) + current_position + equity_return
 Action space  (1-d): continuous allocation in [0, 1]
 Episode length:      252 trading days, random start within the split
 """
@@ -63,7 +63,7 @@ class TradingEnv(gym.Env):
         self._n_rows = len(df)
 
         # Spaces
-        # Obs: 15 market features (z-scored) + position + unrealized_pnl = 17-d
+        # Obs: 15 market features (z-scored) + position + equity_return = 17-d
         _n_market = len(FEATURE_COLS)
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(_n_market + 2,), dtype=np.float32
@@ -81,7 +81,6 @@ class TradingEnv(gym.Env):
         self._start_idx:    int   = 0
         self._current_step: int   = 0
         self._position:     float = 0.0   # current allocation [0, 1]
-        self._entry_price:  float = 0.0   # price when position was last opened
         self._portfolio_val:float = INITIAL_CASH
         self._ret_history:  list  = []    # for rolling vol
 
@@ -101,7 +100,6 @@ class TradingEnv(gym.Env):
         self._start_idx    = int(self._rng.integers(0, max_start + 1))
         self._current_step = 0
         self._position     = 0.0
-        self._entry_price  = float(self._close[self._start_idx])
         self._portfolio_val= INITIAL_CASH
         self._ret_history  = []
 
@@ -128,13 +126,10 @@ class TradingEnv(gym.Env):
         self._ret_history.append(portfolio_return)
         if len(self._ret_history) > 20:
             self._ret_history.pop(0)
-        rolling_vol = float(np.std(self._ret_history)) if len(self._ret_history) > 1 else 1e-4
+        rolling_vol = np.std(self._ret_history) if len(self._ret_history) > 1 else 0.01
 
         reward = sharpe_step_reward(portfolio_return, rolling_vol, position_delta)
 
-        # Update position and entry price
-        if position_delta > 0 and self._position == 0.0:
-            self._entry_price = next_price  # opened a new position
         self._position = new_position
 
         self._current_step += 1
@@ -155,8 +150,7 @@ class TradingEnv(gym.Env):
         idx = self._start_idx + self._current_step
         market_features = self._features[idx]  # shape (15,)
 
-        current_price = float(self._close[idx])
-        unrealized_pnl = (current_price / self._entry_price) - 1.0 if self._entry_price > 0 else 0.0
+        equity_return = (self._portfolio_val / INITIAL_CASH) - 1.0
 
-        obs = np.append(market_features, [self._position, unrealized_pnl]).astype(np.float32)
+        obs = np.append(market_features, [self._position, equity_return]).astype(np.float32)
         return obs
