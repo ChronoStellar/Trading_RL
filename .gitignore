@@ -25,6 +25,7 @@ Thumbs.db
 logs/
 *.log
 agents/backtest_results/
+agents/eval_results/
 
 # ----------------------------
 # Archives & packaged files

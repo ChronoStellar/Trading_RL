@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from gymnasium import spaces
 
-from env.rewards import sharpe_step_reward
+from env.rewards import sharpe_step_reward, TRANSACTION_COST, SLIPPAGE
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 EPISODE_LEN   = 252          # trading days per episode
@@ -101,7 +101,16 @@ class TradingEnv(gym.Env):
         self._current_step = 0
         self._position     = 0.0
         self._portfolio_val= INITIAL_CASH
-        self._ret_history  = []
+
+        # Seed rolling vol from the 20 price returns before episode start so
+        # early-episode rewards aren't garbage.
+        lookback = min(20, self._start_idx)
+        if lookback > 1:
+            prices = self._close[self._start_idx - lookback : self._start_idx + 1]
+            seed_rets = list((prices[1:] / prices[:-1]) - 1.0)
+        else:
+            seed_rets = []
+        self._ret_history = seed_rets
 
         obs = self._get_obs()
         return obs, {}
@@ -116,19 +125,26 @@ class TradingEnv(gym.Env):
         next_price    = float(self._close[idx + 1])
 
         # Portfolio return for this step
-        price_return   = (next_price / current_price) - 1.0
+        price_return     = (next_price / current_price) - 1.0
         portfolio_return = self._position * price_return  # only invested fraction earns
 
-        # Update portfolio value
-        self._portfolio_val *= (1.0 + portfolio_return)
+        # Rolling vol uses portfolio returns (measures portfolio Sharpe correctly).
+        # Floored at 0.003 (~0.3% daily) so it can't collapse to zero when the
+        # agent holds cash, which would otherwise cause reward blow-up.
+        self._ret_history.append(price_return)
 
-        # Rolling volatility (20-day)
-        self._ret_history.append(portfolio_return)
         if len(self._ret_history) > 20:
             self._ret_history.pop(0)
-        rolling_vol = np.std(self._ret_history) if len(self._ret_history) > 1 else 0.01
+        rolling_vol = max(np.std(self._ret_history) if len(self._ret_history) > 1 else 0.01, 0.003)
 
-        reward = sharpe_step_reward(portfolio_return, rolling_vol, position_delta)
+        net_portofolio_return = portfolio_return - (TRANSACTION_COST + SLIPPAGE) * abs(position_delta)
+
+        reward = sharpe_step_reward(net_portofolio_return, rolling_vol, position_delta)
+
+        # Deduct transaction costs from portfolio value so the equity observation
+        # reflects actual realised performance.
+        cost_frac = (TRANSACTION_COST + SLIPPAGE) * abs(position_delta)
+        self._portfolio_val *= (1.0 + portfolio_return) * (1.0 - cost_frac)
 
         self._position = new_position
 
