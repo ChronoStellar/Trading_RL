@@ -23,11 +23,9 @@ FEATURE_COLS  = [
     "ret_1d", "ret_5d", "sma_ratio", "vol_20d", "vol_ratio",
     "rsi_14",
     "macd_hist",
-    "stoch_k", "stoch_d",
-    "bb_width", "bb_pct",
+    "bb_width",
     "obv_ret",
-    "adx", "adx_di_diff",
-    "psar_bull",
+    "adx", "adx_di_diff"
 ]
 PROC_DIR      = os.path.join(os.path.dirname(__file__), "..", "data", "processed")
 

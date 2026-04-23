@@ -3,7 +3,7 @@ data/features.py
 Compute derived features for each ticker, fit a scaler on the training split,
 apply it to all splits, and save the normalized CSVs + scaler JSON.
 
-Market features (15 total — features 16 & 17 are injected by the Gym env):
+Market features (11 total — features 12 & 13 are injected by the Gym env):
   ── Price / return ──────────────────────────────────────────────────────────
   1.  ret_1d        — 1-day return:  (close_t / close_t-1) - 1
   2.  ret_5d        — 5-day return:  (close_t / close_t-5) - 1
@@ -13,14 +13,10 @@ Market features (15 total — features 16 & 17 are injected by the Gym env):
   ── 7 day-trading indicators (via `ta` library) ─────────────────────────────
   6.  rsi_14        — RSI (14-period, Wilder EWM)
   7.  macd_hist     — MACD histogram normalised by close  (scale-free)
-  8.  stoch_k       — Stochastic %K (14-period)
-  9.  stoch_d       — Stochastic %D (3-period signal of %K)
-  10. bb_width      — Bollinger bandwidth: (upper - lower) / mid
-  11. bb_pct        — Bollinger %B: (close - lower) / (upper - lower)
-  12. obv_ret       — On-Balance Volume 1-day % change  (stationary proxy)
-  13. adx           — Average Directional Index (14-period)
-  14. adx_di_diff   — (+DI - -DI) / 100  — directional bias [-1, 1]
-  15. psar_bull     — 1.0 if PSAR uptrend (price > SAR), 0.0 if downtrend
+  8. bb_width      — Bollinger bandwidth: (upper - lower) / mid
+  9. obv_ret       — On-Balance Volume 1-day % change  (stationary proxy)
+  10. adx           — Average Directional Index (14-period)
+  11. adx_di_diff   — (+DI - -DI) / 100  — directional bias [-1, 1]
 """
 
 import json
@@ -47,11 +43,9 @@ FEATURE_COLS = [
     # 7 day-trading indicators
     "rsi_14",
     "macd_hist",
-    "stoch_k", "stoch_d",
-    "bb_width", "bb_pct",
+    "bb_width",
     "obv_ret",
     "adx", "adx_di_diff",
-    "psar_bull",
 ]
 
 
@@ -81,20 +75,11 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     df["macd_hist"] = macd.macd_diff() / df["close"]
 
-    # ── 8–9: Stochastic Oscillator %K / %D ───────────────────────────────────
-    stoch = ta.momentum.StochasticOscillator(
-        high=df["high"], low=df["low"], close=df["close"],
-        window=14, smooth_window=3
-    )
-    df["stoch_k"] = stoch.stoch()
-    df["stoch_d"] = stoch.stoch_signal()
-
     # ── 10–11: Bollinger Bands ────────────────────────────────────────────────
     bb = ta.volatility.BollingerBands(
         close=df["close"], window=20, window_dev=2
     )
     df["bb_width"] = bb.bollinger_wband()   # (upper - lower) / mid
-    df["bb_pct"]   = bb.bollinger_pband()   # (close - lower) / (upper - lower)
 
     # ── 12: On-Balance Volume — 1-day % change (stationary) ──────────────────
     obv            = ta.volume.OnBalanceVolumeIndicator(
@@ -108,13 +93,6 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     df["adx"]        = adx_ind.adx()
     df["adx_di_diff"]= (adx_ind.adx_pos() - adx_ind.adx_neg()) / 100.0
-
-    # ── 15: Parabolic SAR — binary uptrend flag ───────────────────────────────
-    psar            = ta.trend.PSARIndicator(
-        high=df["high"], low=df["low"], close=df["close"],
-        step=0.02, max_step=0.2
-    )
-    df["psar_bull"] = psar.psar_up().notna().astype(np.float32)
 
     # Drop helper intermediates
     df = df.dropna(subset=FEATURE_COLS).reset_index(drop=True)

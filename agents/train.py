@@ -35,7 +35,7 @@ LOGS_DIR   = os.path.join(os.path.dirname(__file__), "logs")
 
 # ── Default hyperparameters (tune via CLI or edit here) ───────────────────────
 DEFAULTS = dict(
-    timesteps  = 500_000,
+    timesteps  = 2000_000,
     n_envs     = 8,           # parallel envs for faster data collection
     seed       = 42,
     device     = "cpu",       # "cpu" or "cuda" (GPU training can be faster but is optional)
