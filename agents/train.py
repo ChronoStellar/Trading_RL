@@ -16,6 +16,7 @@ import argparse
 import csv
 import json
 import os
+import random
 import sys
 from datetime import datetime
 
@@ -23,6 +24,8 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # from sb3_contrib import RecurrentPPO as PPO
+import gymnasium as gym
+from gymnasium import spaces
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
@@ -193,6 +196,26 @@ def train(args: argparse.Namespace) -> None:
     # Persist hyperparameters alongside logs
     with open(os.path.join(run_log_dir, "hparams.json"), "w") as f:
         json.dump(vars(args), f, indent=2)
+
+    # Persist feature list + reward config so every run is self-documenting
+    from data.features import FEATURE_COLS as _FCOLS
+    from env.rewards import RISK_FREE_DAILY as _RF, TRANSACTION_COST as _TC, SLIPPAGE as _SLIP
+    run_config = {
+        "features": {
+            "market": _FCOLS,
+            "env_injected": ["position", "equity_return"],
+            "obs_dim": len(_FCOLS) + 2,
+        },
+        "reward": {
+            "function": "sharpe_step_reward",
+            "risk_free_daily": _RF,
+            "transaction_cost": _TC,
+            "slippage": _SLIP,
+            "formula": "(r_t - rf) / vol - (tc + slip) * |delta| / vol",
+        },
+    }
+    with open(os.path.join(run_log_dir, "run_config.json"), "w") as f:
+        json.dump(run_config, f, indent=2)
 
     # Vectorized environment
     vec_env = make_vec_env(

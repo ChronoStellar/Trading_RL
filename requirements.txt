@@ -7,5 +7,6 @@ numpy
 ta
 statsmodels
 tabulate
+optuna
 
 git+https://github.com/AI4Finance-Foundation/FinRL.git

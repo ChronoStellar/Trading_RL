@@ -8,7 +8,7 @@ import os
 from finrl.meta.preprocessor.yahoodownloader import YahooDownloader
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-START_DATE = "2005-01-01"
+START_DATE = "2010-01-01"
 END_DATE   = "2025-12-31"
 TICKERS    = ["SPY", "QQQ", "IWM"]
 RAW_DIR    = os.path.join(os.path.dirname(__file__), "raw")

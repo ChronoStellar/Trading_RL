@@ -39,11 +39,11 @@ VAL_END   = "2023-12-31"
 
 FEATURE_COLS = [
     # original price/return features
-    "ret_1d", "ret_5d", "sma_ratio", "vol_20d", "vol_ratio",
-    # 7 day-trading indicators
-    "rsi_14", "macd_hist", "bb_width",
-    "obv_ret", "adx", "adx_di_diff",
-    'sma_200_dist','drawdown_60d','vol_regime','ret_20d'
+    "sma_ratio", #"vol_20d", "vol_ratio", "ret_1d", "ret_5d",
+    "rsi_14", "macd_hist", #"bb_width",
+    "obv_ret", "adx", #"adx_di_diff",
+    # 'sma_200_dist',
+    'drawdown_60d','vol_regime','ret_20d'
 ]
 
 
