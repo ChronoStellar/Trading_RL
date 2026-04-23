@@ -17,7 +17,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
-.claude/
+CLAUDE.md
 
 # ----------------------------
 # Logs & runtime files
@@ -105,5 +105,3 @@ coverage/
 .cache/
 tmp/
 temp/
-
-.ipynb
