@@ -1,0 +1,5 @@
+table-baselines3 
+yfinance 
+coremltools 
+gymnasium
+

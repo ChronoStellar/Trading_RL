@@ -15,18 +15,11 @@ import pandas as pd
 from gymnasium import spaces
 
 from env.rewards import sharpe_step_reward, TRANSACTION_COST, SLIPPAGE
+from data.features import FEATURE_COLS
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 EPISODE_LEN   = 252          # trading days per episode
 INITIAL_CASH  = 100_000.0   # simulated starting capital
-FEATURE_COLS  = [
-    "ret_1d", "ret_5d", "sma_ratio", "vol_20d", "vol_ratio",
-    "rsi_14",
-    "macd_hist",
-    "bb_width",
-    "obv_ret",
-    "adx", "adx_di_diff"
-]
 PROC_DIR      = os.path.join(os.path.dirname(__file__), "..", "data", "processed")
 
 
