@@ -41,11 +41,9 @@ FEATURE_COLS = [
     # original price/return features
     "ret_1d", "ret_5d", "sma_ratio", "vol_20d", "vol_ratio",
     # 7 day-trading indicators
-    "rsi_14",
-    "macd_hist",
-    "bb_width",
-    "obv_ret",
-    "adx", "adx_di_diff",
+    "rsi_14", "macd_hist", "bb_width",
+    "obv_ret", "adx", "adx_di_diff",
+    'sma_200_dist','drawdown_60d','vol_regime','ret_20d'
 ]
 
 
@@ -93,6 +91,17 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     df["adx"]        = adx_ind.adx()
     df["adx_di_diff"]= (adx_ind.adx_pos() - adx_ind.adx_neg()) / 100.0
+
+    # ── NEW features ─────────────────────────────────────────────────────────────
+    sma200           = df['close'].rolling(200).mean()
+    df['sma_200_dist']= df['close'] / sma200 - 1          # long-horizon regime: + = above MA
+
+    df['drawdown_60d']= df['close'] / df['close'].rolling(60).max() - 1   # <=0, how far from 60d peak
+
+    vol_60d           = df['ret_1d'].rolling(60).std()
+    df['vol_regime']  = df['vol_20d'] / vol_60d            # >1 = vol expanding, <1 = contracting
+
+    df['ret_20d']     = df['close'].pct_change(20)
 
     # Drop helper intermediates
     df = df.dropna(subset=FEATURE_COLS).reset_index(drop=True)
