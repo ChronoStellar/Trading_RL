@@ -2,4 +2,9 @@ table-baselines3
 yfinance 
 coremltools 
 gymnasium
+numpy
+ta
+statsmodels
+tabulate
 
+git+https://github.com/AI4Finance-Foundation/FinRL.git
