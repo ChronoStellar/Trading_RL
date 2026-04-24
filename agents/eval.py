@@ -66,7 +66,6 @@ def run_episode(model: PPO, env: TradingEnv) -> pd.DataFrame:
     env._start_idx    = 0
     env._current_step = 0
     env._position     = 0.0
-    env._entry_price  = float(env._close[0])
     env._portfolio_val= INITIAL_CASH
     env._ret_history  = []
 

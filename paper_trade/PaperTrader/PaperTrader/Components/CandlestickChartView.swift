@@ -11,6 +11,7 @@ import Charts
 
 struct CandlestickChartView: View {
     let bars: [OHLCVBar]
+    var height: CGFloat? = nil  // nil = expands to fill available space
 
     // Thin out labels when there are many bars
     private var labelStride: Int {
@@ -55,7 +56,7 @@ struct CandlestickChartView: View {
                 AxisValueLabel(format: .currency(code: "USD").precision(.fractionLength(0)))
             }
         }
-        .frame(height: 260)
+        .frame(minHeight: 140, maxHeight: height ?? .infinity)
     }
 
     // Pick evenly spaced dates for x-axis labels

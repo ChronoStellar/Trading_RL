@@ -2,7 +2,7 @@
 env/train_env.py
 Custom Gymnasium environment for single-asset (SPY) continuous position sizing.
 
-State space  (17-d): 15 market features (pre-normalized) + current_position + equity_return
+State space  (10-d): 8 market features (pre-normalized) + current_position + equity_return
 Action space  (1-d): continuous allocation in [0, 1]
 Episode length:      252 trading days, random start within the split
 """
@@ -53,8 +53,7 @@ class TradingEnv(gym.Env):
         self._close:    np.ndarray = df["close"].to_numpy(dtype=np.float32)
         self._n_rows = len(df)
 
-        # Spaces
-        # Obs: 15 market features (z-scored) + position + equity_return = 17-d
+        # Spaces — obs = 8 market features (z-scored) + position + equity_return = 10-d
         _n_market = len(FEATURE_COLS)
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(_n_market + 2,), dtype=np.float32
@@ -155,7 +154,7 @@ class TradingEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         idx = self._start_idx + self._current_step
-        market_features = self._features[idx]  # shape (15,)
+        market_features = self._features[idx]  # shape (8,)
 
         equity_return = (self._portfolio_val / INITIAL_CASH) - 1.0
 

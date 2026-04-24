@@ -3,20 +3,17 @@ data/features.py
 Compute derived features for each ticker, fit a scaler on the training split,
 apply it to all splits, and save the normalized CSVs + scaler JSON.
 
-Market features (11 total — features 12 & 13 are injected by the Gym env):
-  ── Price / return ──────────────────────────────────────────────────────────
-  1.  ret_1d        — 1-day return:  (close_t / close_t-1) - 1
-  2.  ret_5d        — 5-day return:  (close_t / close_t-5) - 1
-  3.  sma_ratio     — close / SMA_20
-  4.  vol_20d       — rolling 20-day std of daily returns
-  5.  vol_ratio     — volume / avg_volume_20d
-  ── 7 day-trading indicators (via `ta` library) ─────────────────────────────
-  6.  rsi_14        — RSI (14-period, Wilder EWM)
-  7.  macd_hist     — MACD histogram normalised by close  (scale-free)
-  8. bb_width      — Bollinger bandwidth: (upper - lower) / mid
-  9. obv_ret       — On-Balance Volume 1-day % change  (stationary proxy)
-  10. adx           — Average Directional Index (14-period)
-  11. adx_di_diff   — (+DI - -DI) / 100  — directional bias [-1, 1]
+Market features (8 total — features 9 & 10 are injected by the Gym env):
+  ── Momentum / trend ────────────────────────────────────────────────────────
+  1.  sma_ratio     — close / SMA-20
+  2.  rsi_14        — RSI (14-period, Wilder EWM)
+  3.  macd_hist     — MACD histogram normalised by close  (scale-free)
+  4.  obv_ret       — On-Balance Volume 1-day % change  (stationary proxy)
+  5.  adx           — Average Directional Index (14-period)
+  ── Regime / drawdown ───────────────────────────────────────────────────────
+  6.  drawdown_60d  — close / rolling-60d-max − 1  (≤ 0, depth from peak)
+  7.  vol_regime    — vol_20d / vol_60d  (> 1 = expanding, < 1 = contracting)
+  8.  ret_20d       — 20-day return
 """
 
 import json
@@ -38,12 +35,14 @@ VAL_END   = "2023-12-31"
 # test is everything after VAL_END
 
 FEATURE_COLS = [
-    # original price/return features
-    "sma_ratio", #"vol_20d", "vol_ratio", "ret_1d", "ret_5d",
-    "rsi_14", "macd_hist", #"bb_width",
-    "obv_ret", "adx", #"adx_di_diff",
-    # 'sma_200_dist',
-    'drawdown_60d','vol_regime','ret_20d'
+    "sma_ratio",
+    "rsi_14",
+    "macd_hist",
+    "obv_ret",
+    "adx",
+    "drawdown_60d",
+    "vol_regime",
+    "ret_20d",
 ]
 
 

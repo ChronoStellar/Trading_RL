@@ -8,6 +8,14 @@ import CoreML
 import SwiftYFinance
 internal import Combine
 
+// MARK: - Portfolio report
+
+struct PortfolioReport {
+    let periodReturn: Double    // total % return over selected period
+    let sharpeRatio: Double     // annualized Sharpe (zero risk-free)
+    let maxDrawdown: Double     // maximum drawdown (≤ 0)
+}
+
 // MARK: - Date range preset
 
 enum DateRange: String, CaseIterable, Identifiable {
@@ -20,8 +28,8 @@ enum DateRange: String, CaseIterable, Identifiable {
 
     var calendarDays: Int {
         switch self {
-        case .oneMonth:    return 40    // 40 calendar ≈ 21+ trading days (min for features)
-        case .threeMonths: return 95
+        case .oneMonth:    return 95    // 95 calendar ≈ 65 trading days (min 61 for vol_regime/drawdown_60d)
+        case .threeMonths: return 130
         case .sixMonths:   return 185
         case .oneYear:     return 370
         }
@@ -37,7 +45,8 @@ final class TraderViewModel: ObservableObject {
 
     @Published var ticker: String      = "SPY"
     @Published var searchText: String  = "SPY"
-    @Published var dateRange: DateRange = .threeMonths
+    @Published var dateRange: DateRange = .sixMonths
+    @Published var accountBalance: Double = 100_000
 
     @Published var bars: [OHLCVBar]    = []
     @Published var allocation: Float   = 0
@@ -47,6 +56,26 @@ final class TraderViewModel: ObservableObject {
     @Published var isLoading: Bool     = false
     @Published var errorMessage: String?
     @Published var lastUpdated: Date?
+
+    // MARK: Computed split
+
+    var cashBalance: Double { accountBalance * (1.0 - position) }
+    var portfolioBalance: Double { accountBalance * position }
+
+    var portfolioReport: PortfolioReport? {
+        guard bars.count >= 5 else { return nil }
+        let closes = bars.map { $0.close }
+        let returns = zip(closes.dropFirst(), closes).map { (c, p) in (c - p) / p }
+        let periodReturn = (closes.last! - closes.first!) / closes.first!
+        let mean = returns.reduce(0, +) / Double(returns.count)
+        let variance = returns.map { pow($0 - mean, 2) }.reduce(0, +) / Double(max(returns.count - 1, 1))
+        let std = sqrt(variance)
+        let sharpe = std > 0 ? (mean / std) * sqrt(252) : 0
+        var peak = closes[0]
+        var maxDD = 0.0
+        for c in closes { peak = max(peak, c); maxDD = min(maxDD, (c - peak) / peak) }
+        return PortfolioReport(periodReturn: periodReturn, sharpeRatio: sharpe, maxDrawdown: maxDD)
+    }
 
     // MARK: Private
 
@@ -69,6 +98,14 @@ final class TraderViewModel: ObservableObject {
     func search() {
         let t = searchText.trimmingCharacters(in: .whitespaces).uppercased()
         guard !t.isEmpty else { return }
+        
+        if ticker != t {
+            position = 0
+            entryPrice = 0
+            unrealisedPnL = 0
+            allocation = 0
+        }
+        
         ticker = t
         Task { await fetchAndInfer() }
     }
