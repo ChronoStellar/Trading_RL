@@ -115,6 +115,11 @@ final class TraderViewModel: ObservableObject {
         Task { await fetchAndInfer() }
     }
 
+    func topUp(amount: Double) {
+        guard amount > 0 else { return }
+        accountBalance += amount
+    }
+
     func refresh() {
         Task { await fetchAndInfer() }
     }
