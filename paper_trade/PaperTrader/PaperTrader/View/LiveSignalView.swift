@@ -49,7 +49,7 @@ struct LiveSignalView: View {
                     Button { showSheet = true } label: {
                         HStack {
                             Image(systemName: "sparkles")
-                            Text("Today's Signal · \(Int(vm.allocation * 100))%")
+                            Text("Today's Signal")
                                 .font(.headline)
                         }
                         .frame(maxWidth: .infinity)

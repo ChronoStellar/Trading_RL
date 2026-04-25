@@ -2,10 +2,11 @@
 //  SimulationViewModel.swift
 //  PaperTrader
 //
-//  Interactive simulation: pre-computes bars + the model's suggested allocations,
-//  then plays the chart back bar-by-bar. At every "critical decision point" (model
-//  allocation crosses an action threshold) the playback pauses and waits for the
-//  user to Buy / Sell / Hold. The *user's* actions drive the equity curve.
+//  Interactive simulation with **live inference**: the model is run once per
+//  playback tick, conditioned on the user's *actual* position. Whenever the
+//  model's allocation crosses the action threshold, playback pauses and asks
+//  the user to Buy / Sell / Hold. A parallel "ghost" pass (model running
+//  itself) tracks what the agent alone would have done, for comparison.
 //
 
 import Foundation
@@ -16,18 +17,18 @@ internal import Combine
 struct SimStep {
     let date: Date
     let price: Double
-    let modelAlloc: Float   // model's suggested allocation at this bar
+    let modelAlloc: Float   // model's recommendation given the user's actual position
 }
 
 enum ActionKind { case buy, sell }
 
 struct ActionPoint: Identifiable {
     let id = UUID()
-    let kind: ActionKind        // direction the model suggests
+    let kind: ActionKind
     let date: Date
     let price: Double
-    let modelAlloc: Float       // model's suggestion at the decision bar
-    var index: Int              // index into `steps`
+    let modelAlloc: Float
+    var index: Int
 }
 
 enum UserChoice { case buy, sell, hold }
@@ -45,7 +46,7 @@ struct UserAction: Identifiable {
 struct SimReport {
     let userReturn: Double
     let benchmarkReturn: Double
-    let modelReturn: Double      // for comparison: what the agent would have earned alone
+    let modelReturn: Double
     let userActions: Int
     let modelActions: Int
 }
@@ -57,8 +58,9 @@ final class SimulationViewModel: ObservableObject {
     static let transactionCost: Double = 0.0005
     static let slippage:        Double = 0.0005
     static let actionThreshold: Float  = 0.5
-    /// Per-bar playback delay during animation (ms).
-    static let playbackTickMs:  UInt64 = 50
+    /// Per-bar playback delay during animation (ms). Live inference happens
+    /// inside the loop, so the wall-clock cadence is `tick + inference`.
+    static let playbackTickMs:  UInt64 = 150
 
     // MARK: Configuration
     @Published var ticker: String     = "SPY"
@@ -66,22 +68,24 @@ final class SimulationViewModel: ObservableObject {
     @Published var startDate: Date
     @Published var endDate:   Date
 
-    // MARK: Pre-computed series
-    @Published var steps:   [SimStep]    = []
-    @Published var actions: [ActionPoint] = []   // model's decision points
-
-    // MARK: Live playback state
-    @Published var revealedIndex: Int       = 0          // last bar shown on chart
-    @Published var pendingDecision: ActionPoint?         // non-nil → playback paused
-    @Published var userActions: [UserAction] = []
-    @Published var userEquity:  [Double]     = [1.0]     // equity series, indexed alongside revealedIndex
-    @Published var benchEquity: [Double]     = [1.0]
-    @Published var modelEquity: [Double]     = [1.0]     // ghost: what model alone would do
-    @Published var userPosition: Double      = 0
-    @Published var isPlaying: Bool           = false
-    @Published var isLoading: Bool           = false
-    @Published var isComplete: Bool          = false
+    // MARK: Live state (grown bar-by-bar during playback)
+    @Published var steps:        [SimStep]    = []
+    @Published var actions:      [ActionPoint] = []
+    @Published var pendingDecision: ActionPoint?
+    @Published var userActions:  [UserAction] = []
+    @Published var userEquity:   [Double] = [1.0]
+    @Published var benchEquity:  [Double] = [1.0]
+    @Published var modelEquity:  [Double] = [1.0]
+    @Published var userPosition: Double  = 0
+    @Published var isPlaying:    Bool    = false
+    @Published var isLoading:    Bool    = false
+    @Published var isComplete:   Bool    = false
     @Published var errorMessage: String?
+
+    /// `revealedIndex` is `steps.count - 1` once at least one step exists,
+    /// else `-1`. The view uses this for "Bar N / total".
+    var revealedIndex: Int { max(steps.count - 1, 0) }
+    var totalBars:     Int { history.count - simStartIdx }
 
     var report: SimReport? {
         guard isComplete, let last = userEquity.last, let first = userEquity.first else { return nil }
@@ -94,11 +98,21 @@ final class SimulationViewModel: ObservableObject {
         )
     }
 
-    // MARK: Private
+    // MARK: Private — pre-fetch
+    private var history:     [OHLCVBar] = []
+    private var simStartIdx: Int = 0   // index in `history` of the first bar in [startDate, endDate]
+    private var cursor:      Int = 0   // index in `history` of the next bar to reveal
+
+    // MARK: Private — running state
+    private var entryPrice:     Double = 0   // user position entry (for obs's equity_return proxy)
+    private var ghostPosition:  Double = 0
+    private var ghostEntry:     Double = 0
+    private var prevModelAlloc: Float  = 0
+
+    // MARK: Private — engine
     private let model:  TradingActor
     private let engine: FeatureEngine
     private var playTask: Task<Void, Never>?
-    private var modelPosition: Double = 0     // for ghost equity series
 
     // MARK: Init
     init() {
@@ -112,7 +126,7 @@ final class SimulationViewModel: ObservableObject {
         self.startDate = Calendar.current.date(byAdding: .month, value: -6, to: now)!
     }
 
-    // MARK: Configuration actions
+    // MARK: Configuration
 
     func selectTicker(_ t: String) {
         searchText = t
@@ -125,101 +139,50 @@ final class SimulationViewModel: ObservableObject {
         ticker = t
     }
 
-    // MARK: Simulation lifecycle
+    // MARK: Lifecycle
 
-    /// Resets state, fetches bars, precomputes the agent's decisions, then starts playback.
+    /// Fetches bars (with feature lead-in) then begins live playback.
     func startSimulation() async {
         cancelPlayback()
         resetState()
         isLoading = true
 
         let leadIn = Calendar.current.date(byAdding: .day, value: -120, to: startDate)!
-        let history: [OHLCVBar]
+        let fetched: [OHLCVBar]
         do {
-            history = try await fetchBars(ticker: ticker, start: leadIn, end: endDate)
+            fetched = try await fetchBars(ticker: ticker, start: leadIn, end: endDate)
         } catch {
             errorMessage = "Fetch failed: \(error.localizedDescription)"
             isLoading = false
             return
         }
 
-        guard let firstIdx = history.firstIndex(where: { $0.date >= startDate }),
+        guard let firstIdx = fetched.firstIndex(where: { $0.date >= startDate }),
               firstIdx >= FeatureEngine.minBars else {
             errorMessage = "Need \(FeatureEngine.minBars)+ trading days before the start date."
             isLoading = false
             return
         }
 
-        var ghostPosition: Double = 0
-        var ghostEntry:    Double = 0
-        var prevAlloc:     Float  = 0
-        var computed:      [SimStep]    = []
-        var detected:      [ActionPoint] = []
-
-        for i in firstIdx..<history.count {
-            let window = Array(history[0...i])
-            guard let obs = engine.observation(bars: window, position: ghostPosition, entryPrice: ghostEntry) else { continue }
-
-            let alloc: Float
-            do {
-                let input = try mlInput(from: obs)
-                let out   = try await model.prediction(input: input)
-                alloc = out.allocation[0].floatValue
-            } catch {
-                errorMessage = "Inference error: \(error.localizedDescription)"
-                isLoading = false
-                return
-            }
-
-            let bar = history[i]
-            let stepIndex = computed.count
-
-            // Detect threshold crossings as action points.
-            if !computed.isEmpty {
-                if prevAlloc < Self.actionThreshold && alloc >= Self.actionThreshold {
-                    detected.append(ActionPoint(kind: .buy,  date: bar.date, price: bar.close,
-                                                modelAlloc: alloc, index: stepIndex))
-                } else if prevAlloc >= Self.actionThreshold && alloc < Self.actionThreshold {
-                    detected.append(ActionPoint(kind: .sell, date: bar.date, price: bar.close,
-                                                modelAlloc: alloc, index: stepIndex))
-                }
-            }
-            prevAlloc = alloc
-
-            // Update ghost position bookkeeping.
-            let newPos = Double(alloc)
-            if ghostPosition == 0 && newPos > 0 { ghostEntry = bar.close }
-            else if newPos == 0                 { ghostEntry = 0 }
-            ghostPosition = newPos
-
-            computed.append(SimStep(date: bar.date, price: bar.close, modelAlloc: alloc))
-        }
-
-        steps   = computed
-        actions = detected
-        isLoading = false
-        guard !steps.isEmpty else {
-            errorMessage = "No bars in simulation range."
-            return
-        }
+        history      = fetched
+        simStartIdx  = firstIdx
+        cursor       = firstIdx
+        isLoading    = false
         play()
     }
 
-    /// User's response to a pending decision point. Resumes playback.
     func decide(_ choice: UserChoice) {
         guard let decision = pendingDecision else { return }
-        let prev = userPosition
+        let prev   = userPosition
         let target = Double(decision.modelAlloc)
         let newPos: Double = {
             switch choice {
-            // Accept the model's recommendation in the direction it suggested.
             case .buy:  return max(prev, target)
             case .sell: return min(prev, target)
             case .hold: return prev
             }
         }()
 
-        // Record the action.
         userActions.append(UserAction(
             choice: choice,
             date: decision.date,
@@ -229,14 +192,17 @@ final class SimulationViewModel: ObservableObject {
             stepIndex: decision.index
         ))
 
-        // Apply transaction cost on the current (revealed) equity for any rebalance.
+        // Apply transaction cost on the current equity for any rebalance.
         let turnover = abs(newPos - prev)
         if turnover > 0, var last = userEquity.last {
             last *= (1.0 - (Self.transactionCost + Self.slippage) * turnover)
             userEquity[userEquity.count - 1] = last
         }
 
+        if prev == 0 && newPos > 0 { entryPrice = decision.price }
+        else if newPos == 0        { entryPrice = 0 }
         userPosition = newPos
+
         pendingDecision = nil
         play()
     }
@@ -251,18 +217,18 @@ final class SimulationViewModel: ObservableObject {
 
     private func play() {
         guard pendingDecision == nil else { return }
-        guard revealedIndex < steps.count - 1 else {
-            isComplete = revealedIndex == steps.count - 1 && !steps.isEmpty
+        guard cursor < history.count else {
+            isComplete = !steps.isEmpty
             isPlaying = false
             return
         }
         isPlaying = true
         playTask = Task { @MainActor in
-            while revealedIndex < steps.count - 1 {
+            while cursor < history.count {
                 if Task.isCancelled { break }
                 try? await Task.sleep(nanoseconds: Self.playbackTickMs * 1_000_000)
                 if Task.isCancelled { break }
-                advanceOneBar()
+                await advanceOneBar()
                 if pendingDecision != nil {
                     isPlaying = false
                     return
@@ -273,40 +239,97 @@ final class SimulationViewModel: ObservableObject {
         }
     }
 
-    private func advanceOneBar() {
-        let next = revealedIndex + 1
-        guard next < steps.count else { return }
-        let prev = steps[revealedIndex]
-        let curr = steps[next]
-        let priceRet = (curr.price - prev.price) / prev.price
+    /// Reveals the next bar: live inference (user-conditioned), parallel ghost
+    /// inference, equity update, threshold check.
+    private func advanceOneBar() async {
+        let i = cursor
+        guard i < history.count else { return }
 
-        // User equity uses user's current position.
-        let lastUser  = userEquity.last  ?? 1.0
-        let lastBench = benchEquity.last ?? 1.0
-        let lastModel = modelEquity.last ?? 1.0
-        userEquity.append(lastUser  * (1.0 + userPosition          * priceRet))
-        benchEquity.append(lastBench * (1.0 + priceRet))
-        modelEquity.append(lastModel * (1.0 + Double(prev.modelAlloc) * priceRet))
+        let window = Array(history[0...i])
 
-        revealedIndex = next
-
-        // Pause for user input on the *bar* matching an action point.
-        if let action = actions.first(where: { $0.index == next }) {
-            pendingDecision = action
+        // Live inference using the user's *actual* position.
+        guard let userObs = engine.observation(bars: window, position: userPosition, entryPrice: entryPrice) else {
+            // Insufficient history at this bar — skip forward without halting.
+            cursor += 1
+            return
         }
+        guard let userInput = try? mlInput(from: userObs),
+              let userOut   = try? await model.prediction(input: userInput) else {
+            errorMessage = "Inference error at bar \(i)."
+            cursor = history.count
+            return
+        }
+        let userAlloc = userOut.allocation[0].floatValue
+
+        // Ghost inference (model running itself) for the comparison curve.
+        var ghostAlloc: Float = 0
+        if let ghostObs = engine.observation(bars: window, position: ghostPosition, entryPrice: ghostEntry),
+           let ghostInput = try? mlInput(from: ghostObs),
+           let ghostOut   = try? await model.prediction(input: ghostInput) {
+            ghostAlloc = ghostOut.allocation[0].floatValue
+        }
+
+        let bar = history[i]
+        let isFirstStep = steps.isEmpty
+
+        // Compute per-bar return and update equities (skip on first step — no prior bar).
+        if !isFirstStep {
+            let prev = history[i - 1].close
+            let priceRet = (bar.close - prev) / prev
+
+            let lastUser  = userEquity.last  ?? 1.0
+            let lastBench = benchEquity.last ?? 1.0
+            let lastModel = modelEquity.last ?? 1.0
+            userEquity.append(lastUser  * (1.0 + userPosition         * priceRet))
+            benchEquity.append(lastBench * (1.0 + priceRet))
+            modelEquity.append(lastModel * (1.0 + ghostPosition       * priceRet))
+        }
+
+        // Update ghost bookkeeping for the next bar.
+        let newGhost = Double(ghostAlloc)
+        if ghostPosition == 0 && newGhost > 0 { ghostEntry = bar.close }
+        else if newGhost == 0                 { ghostEntry = 0 }
+        ghostPosition = newGhost
+
+        // Append the step *before* deciding on a pause so the chart shows it.
+        let stepIndex = steps.count
+        steps.append(SimStep(date: bar.date, price: bar.close, modelAlloc: userAlloc))
+
+        // Threshold-cross detection on the user-conditioned signal.
+        if !isFirstStep {
+            if prevModelAlloc < Self.actionThreshold && userAlloc >= Self.actionThreshold {
+                let pt = ActionPoint(kind: .buy, date: bar.date, price: bar.close,
+                                     modelAlloc: userAlloc, index: stepIndex)
+                actions.append(pt)
+                pendingDecision = pt
+            } else if prevModelAlloc >= Self.actionThreshold && userAlloc < Self.actionThreshold {
+                let pt = ActionPoint(kind: .sell, date: bar.date, price: bar.close,
+                                     modelAlloc: userAlloc, index: stepIndex)
+                actions.append(pt)
+                pendingDecision = pt
+            }
+        }
+        prevModelAlloc = userAlloc
+
+        cursor += 1
     }
 
     private func resetState() {
-        revealedIndex   = 0
-        pendingDecision = nil
+        history         = []
+        simStartIdx     = 0
+        cursor          = 0
+        steps           = []
+        actions         = []
         userActions     = []
         userEquity      = [1.0]
         benchEquity     = [1.0]
         modelEquity     = [1.0]
         userPosition    = 0
-        modelPosition   = 0
-        steps           = []
-        actions         = []
+        entryPrice      = 0
+        ghostPosition   = 0
+        ghostEntry      = 0
+        prevModelAlloc  = 0
+        pendingDecision = nil
         isComplete      = false
         errorMessage    = nil
     }

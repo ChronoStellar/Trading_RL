@@ -60,16 +60,38 @@ struct SimulationDetailView: View {
 
     private var chartSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                legendDot(.green, "Price")
-                legendDot(.blue,  "You")
-                legendDot(.gray,  "B&H")
-                Spacer()
-                if !vm.steps.isEmpty {
-                    Text("Bar \(vm.revealedIndex + 1) / \(vm.steps.count)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+            HStack(alignment: .top) {
+                if let current = vm.steps.last {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(current.date.formatted(date: .abbreviated, time: .omitted))
+                            .font(.subheadline.weight(.semibold))
+                        Text(current.price, format: .currency(code: "USD"))
+                            .font(.title3.bold().monospacedDigit())
+                            .foregroundStyle(.green)
+                    }
+                } else {
+                    Text("—").font(.subheadline).foregroundStyle(.tertiary)
                 }
+                Spacer()
+                if !vm.steps.isEmpty, vm.totalBars > 0 {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Bar \(vm.revealedIndex + 1) / \(vm.totalBars)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        if vm.steps.count >= 2 {
+                            let chg = (vm.steps.last!.price - vm.steps.first!.price) / vm.steps.first!.price
+                            Text(chg, format: .percent.precision(.fractionLength(2)))
+                                .font(.caption.bold().monospacedDigit())
+                                .foregroundStyle(chg >= 0 ? .green : .red)
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 12) {
+                legendDot(.blue,  "You")
+                legendDot(.gray,  "Buy & Hold")
+                Spacer()
             }
 
             ZStack {
@@ -87,12 +109,17 @@ struct SimulationDetailView: View {
                             gridPath(in: geo.size)
                                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
 
-                            // Price line (revealed portion only)
-                            pricePath(in: geo.size)
-                                .stroke(.green,
-                                        style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                            // Buy & Hold equity (gray, behind)
+                            equityPath(vm.benchEquity, in: geo.size)
+                                .stroke(.gray.opacity(0.7),
+                                        style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: [4, 3]))
 
-                            // User actions placed at execution bars
+                            // User equity (blue, foreground)
+                            equityPath(vm.userEquity, in: geo.size)
+                                .stroke(.blue,
+                                        style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
+
+                            // User actions placed on the user equity line
                             ForEach(vm.userActions) { action in
                                 userMarker(action, in: geo.size)
                             }
@@ -159,11 +186,13 @@ struct SimulationDetailView: View {
         }
     }
 
-    /// Bounds use the *full* price range so the y-axis doesn't jump as bars reveal.
-    private func priceBounds() -> (min: Double, max: Double)? {
-        let prices = vm.steps.map(\.price)
-        guard let lo = prices.min(), let hi = prices.max(), hi > lo else { return nil }
-        return (lo, hi)
+    /// Bounds spanning both equity series, with a small headroom so the lines aren't pinned to the edges.
+    private func equityBounds() -> (min: Double, max: Double)? {
+        let combined = vm.userEquity + vm.benchEquity
+        guard let lo = combined.min(), let hi = combined.max() else { return nil }
+        if hi - lo < 1e-6 { return (lo - 0.01, hi + 0.01) }
+        let pad = (hi - lo) * 0.08
+        return (lo - pad, hi + pad)
     }
 
     private func xPosition(forIndex i: Int, in size: CGSize) -> CGFloat {
@@ -171,18 +200,18 @@ struct SimulationDetailView: View {
         return CGFloat(i) / CGFloat(vm.steps.count - 1) * size.width
     }
 
-    private func yPosition(forPrice p: Double, in size: CGSize) -> CGFloat {
-        guard let b = priceBounds() else { return size.height / 2 }
+    private func yPosition(forEquity e: Double, in size: CGSize) -> CGFloat {
+        guard let b = equityBounds() else { return size.height / 2 }
         let range = b.max - b.min
-        return CGFloat((b.max - p) / range) * size.height
+        return CGFloat((b.max - e) / range) * size.height
     }
 
-    private func pricePath(in size: CGSize) -> Path {
-        guard priceBounds() != nil else { return Path() }
+    private func equityPath(_ values: [Double], in size: CGSize) -> Path {
+        guard values.count > 1, equityBounds() != nil else { return Path() }
         var path = Path()
-        for i in 0...vm.revealedIndex {
+        for i in 0..<values.count {
             let x = xPosition(forIndex: i, in: size)
-            let y = yPosition(forPrice: vm.steps[i].price, in: size)
+            let y = yPosition(forEquity: values[i], in: size)
             if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
             else      { path.addLine(to: CGPoint(x: x, y: y)) }
         }
@@ -191,9 +220,9 @@ struct SimulationDetailView: View {
 
     @ViewBuilder
     private func userMarker(_ action: UserAction, in size: CGSize) -> some View {
-        if action.stepIndex < vm.steps.count {
+        if action.stepIndex < vm.userEquity.count {
             let x = xPosition(forIndex: action.stepIndex, in: size)
-            let y = yPosition(forPrice: action.price, in: size)
+            let y = yPosition(forEquity: vm.userEquity[action.stepIndex], in: size)
             let (icon, color): (String, Color) = {
                 switch action.choice {
                 case .buy:  return ("arrow.up.circle.fill", .blue)
@@ -213,9 +242,9 @@ struct SimulationDetailView: View {
 
     @ViewBuilder
     private func pulseMarker(at index: Int, in size: CGSize) -> some View {
-        if index < vm.steps.count {
+        if index < vm.userEquity.count {
             let x = xPosition(forIndex: index, in: size)
-            let y = yPosition(forPrice: vm.steps[index].price, in: size)
+            let y = yPosition(forEquity: vm.userEquity[index], in: size)
             PulseDot(color: .orange).position(x: x, y: y)
         }
     }

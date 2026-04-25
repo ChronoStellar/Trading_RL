@@ -9,7 +9,7 @@
 import SwiftUI
 import Charts
 
-struct CandlestickChartView: View {
+struct CandlestickChartView: View{
     let bars: [OHLCVBar]
     var height: CGFloat? = nil  // nil = expands to fill available space
 
