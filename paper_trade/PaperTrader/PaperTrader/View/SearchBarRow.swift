@@ -6,21 +6,22 @@
 import SwiftUI
 
 struct SearchBarRow: View {
-    @ObservedObject var vm: TraderViewModel
-    @Binding var showCalendar: Bool
+    @Binding var text: String
+    var onSubmit: () -> Void
+    var trailing: AnyView? = nil
 
     var body: some View {
         HStack(spacing: 10) {
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search ticker…", text: $vm.searchText)
+                TextField("Search ticker…", text: $text)
                     .textInputAutocapitalization(.characters)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
-                    .onSubmit { vm.search() }
-                if !vm.searchText.isEmpty {
-                    Button { vm.searchText = "" } label: {
+                    .onSubmit(onSubmit)
+                if !text.isEmpty {
+                    Button { text = "" } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
                     }
@@ -29,13 +30,7 @@ struct SearchBarRow: View {
             .padding(10)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
 
-            Button { showCalendar = true } label: {
-                Image(systemName: "calendar")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 42, height: 42)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-            }
+            if let trailing { trailing }
         }
     }
 }
