@@ -1,0 +1,24 @@
+{
+  "trial_number": 43,
+  "val_sharpe": 1.6996490181358384,
+  "features": [
+    "sma_ratio",
+    "rsi_14",
+    "macd_hist",
+    "obv_ret",
+    "adx",
+    "drawdown_60d",
+    "vol_regime",
+    "ret_20d"
+  ],
+  "n_features": 8,
+  "ppo": {
+    "n_steps": 4096,
+    "batch_size": 512,
+    "learning_rate": 0.0004959866231913416,
+    "n_epochs": 27,
+    "gamma": 0.9732982353775781,
+    "gae_lambda": 0.8901714572247674,
+    "ent_coef": 0.0006010290773068923
+  }
+}

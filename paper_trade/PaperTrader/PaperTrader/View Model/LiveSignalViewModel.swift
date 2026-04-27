@@ -1,5 +1,5 @@
 //
-//  TraderViewModel.swift
+//  LiveSignalViewModel.swift
 //  PaperTrader
 //
 
@@ -8,54 +8,56 @@ import CoreML
 import SwiftYFinance
 internal import Combine
 
-// MARK: - Date range preset
-
-enum DateRange: String, CaseIterable, Identifiable {
-    case oneMonth  = "1M"
+enum DisplayWindow: String, CaseIterable, Identifiable {
+    case oneDay      = "1D"
+    case fiveDay     = "5D"
+    case oneMonth    = "1M"
     case threeMonths = "3M"
-    case sixMonths = "6M"
-    case oneYear   = "1Y"
+    case sixMonths   = "6M"
+    case oneYear     = "1Y"
 
     var id: String { rawValue }
 
-    var calendarDays: Int {
+    /// How many of the most recent *trading* bars to display on the chart.
+    var displayBars: Int {
         switch self {
-        case .oneMonth:    return 40    // 40 calendar ≈ 21+ trading days (min for features)
-        case .threeMonths: return 95
-        case .sixMonths:   return 185
-        case .oneYear:     return 370
+        case .oneDay:      return 1
+        case .fiveDay:     return 5
+        case .oneMonth:    return 22
+        case .threeMonths: return 66
+        case .sixMonths:   return 130
+        case .oneYear:     return 252
         }
     }
 }
 
-// MARK: - ViewModel
-
 @MainActor
-final class TraderViewModel: ObservableObject {
+final class LiveSignalViewModel: ObservableObject {
 
     // MARK: Published state
+    @Published var ticker: String       = "SPY"
+    @Published var searchText: String   = "SPY"
+    @Published var window: DisplayWindow = .sixMonths
 
-    @Published var ticker: String      = "SPY"
-    @Published var searchText: String  = "SPY"
-    @Published var dateRange: DateRange = .threeMonths
-
-    @Published var bars: [OHLCVBar]    = []
-    @Published var allocation: Float   = 0
+    @Published var bars: [OHLCVBar]     = []   // full fetched history (for feature computation)
+    @Published var allocation: Float    = 0
     @Published var currentPrice: Double = 0
-    @Published var position: Double    = 0
-    @Published var unrealisedPnL: Double = 0
-    @Published var isLoading: Bool     = false
+    @Published var isLoading: Bool      = false
     @Published var errorMessage: String?
     @Published var lastUpdated: Date?
 
-    // MARK: Private
+    /// Bars visible in the chart — suffix of `bars` per selected window.
+    var displayedBars: [OHLCVBar] {
+        Array(bars.suffix(window.displayBars))
+    }
 
-    private var entryPrice: Double = 0
+    // MARK: Private
     private let model:  TradingActor
     private let engine: FeatureEngine
+    /// Calendar-day fetch window — large enough for feature computation (≥ 61 trading days) *and* up to 1Y display.
+    private let fetchCalendarDays = 400
 
     // MARK: Init
-
     init() {
         guard let m = try? TradingActor() else {
             fatalError("Could not load TradingActor.mlpackage")
@@ -73,24 +75,17 @@ final class TraderViewModel: ObservableObject {
         Task { await fetchAndInfer() }
     }
 
-    func selectDateRange(_ range: DateRange) {
-        dateRange = range
-        Task { await fetchAndInfer() }
+    func selectTicker(_ t: String) {
+        searchText = t
+        search()
+    }
+
+    func selectWindow(_ w: DisplayWindow) {
+        window = w  // no refetch — the same bars power the chart slice
     }
 
     func refresh() {
         Task { await fetchAndInfer() }
-    }
-
-    func applyAllocation() {
-        let prev = position
-        position = Double(allocation)
-        if prev == 0 && position > 0 {
-            entryPrice = currentPrice
-        } else if position == 0 {
-            entryPrice = 0
-        }
-        unrealisedPnL = entryPrice > 0 ? (currentPrice / entryPrice) - 1 : 0
     }
 
     // MARK: Fetch + infer
@@ -100,7 +95,7 @@ final class TraderViewModel: ObservableObject {
         errorMessage = nil
 
         let end   = Date()
-        let start = Calendar.current.date(byAdding: .day, value: -dateRange.calendarDays, to: end)!
+        let start = Calendar.current.date(byAdding: .day, value: -fetchCalendarDays, to: end)!
 
         do {
             bars         = try await fetchBars(ticker: ticker, start: start, end: end)
@@ -111,11 +106,8 @@ final class TraderViewModel: ObservableObject {
             return
         }
 
-        // Need at least minBars to compute all rolling features
-        guard let obs = engine.observation(
-            bars: bars, position: position, entryPrice: entryPrice
-        ) else {
-            errorMessage = "Need \(FeatureEngine.minBars)+ trading days — try a longer range."
+        guard let obs = engine.observation(bars: bars, position: 0, entryPrice: 0) else {
+            errorMessage = "Need \(FeatureEngine.minBars)+ trading days of history."
             isLoading    = false
             return
         }
@@ -130,9 +122,8 @@ final class TraderViewModel: ObservableObject {
             return
         }
 
-        unrealisedPnL = entryPrice > 0 ? (currentPrice / entryPrice) - 1 : 0
-        lastUpdated   = Date()
-        isLoading     = false
+        lastUpdated = Date()
+        isLoading   = false
     }
 
     // MARK: Helpers
@@ -146,10 +137,7 @@ final class TraderViewModel: ObservableObject {
     private func fetchBars(ticker: String, start: Date, end: Date) async throws -> [OHLCVBar] {
         try await withCheckedThrowingContinuation { continuation in
             SwiftYFinance.chartDataBy(
-                identifier: ticker,
-                start: start,
-                end: end,
-                interval: .oneday
+                identifier: ticker, start: start, end: end, interval: .oneday
             ) { (data: [StockChartData]?, error: Error?) in
                 if let error { continuation.resume(throwing: error); return }
                 guard let data, !data.isEmpty else {
@@ -161,9 +149,9 @@ final class TraderViewModel: ObservableObject {
                           let low   = bar.low,   let close = bar.close,
                           let vol   = bar.volume else { return nil }
                     return OHLCVBar(date: date,
-                                   open: Double(open), high: Double(high),
-                                   low: Double(low),   close: Double(close),
-                                   volume: Double(vol))
+                                    open: Double(open), high: Double(high),
+                                    low: Double(low),   close: Double(close),
+                                    volume: Double(vol))
                 }
                 continuation.resume(returning: bars)
             }

@@ -3,13 +3,17 @@ data/features.py
 Compute derived features for each ticker, fit a scaler on the training split,
 apply it to all splits, and save the normalized CSVs + scaler JSON.
 
-Features (6 market features — features 7 & 8 are injected by the Gym env):
-  1. ret_1d       — 1-day return:  (close_t / close_t-1) - 1
-  2. ret_5d       — 5-day return:  (close_t / close_t-5) - 1
-  3. rsi_14       — RSI (14-period)
-  4. sma_ratio    — close / SMA_20
-  5. vol_20d      — rolling 20-day std of daily returns
-  6. vol_ratio    — volume / avg_volume_20d
+Market features (8 total — features 9 & 10 are injected by the Gym env):
+  ── Momentum / trend ────────────────────────────────────────────────────────
+  1.  sma_ratio     — close / SMA-20
+  2.  rsi_14        — RSI (14-period, Wilder EWM)
+  3.  macd_hist     — MACD histogram normalised by close  (scale-free)
+  4.  obv_ret       — On-Balance Volume 1-day % change  (stationary proxy)
+  5.  adx           — Average Directional Index (14-period)
+  ── Regime / drawdown ───────────────────────────────────────────────────────
+  6.  drawdown_60d  — close / rolling-60d-max − 1  (≤ 0, depth from peak)
+  7.  vol_regime    — vol_20d / vol_60d  (> 1 = expanding, < 1 = contracting)
+  8.  ret_20d       — 20-day return
 """
 
 import json
@@ -17,6 +21,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import ta
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 RAW_DIR      = os.path.join(os.path.dirname(__file__), "raw")
@@ -29,36 +34,75 @@ TRAIN_END = "2021-12-31"
 VAL_END   = "2023-12-31"
 # test is everything after VAL_END
 
-FEATURE_COLS = ["ret_1d", "ret_5d", "rsi_14", "sma_ratio", "vol_20d", "vol_ratio"]
+FEATURE_COLS = [
+    "sma_ratio",
+    "rsi_14",
+    "macd_hist",
+    "obv_ret",
+    "adx",
+    "drawdown_60d",
+    "vol_regime",
+    "ret_20d",
+]
 
 
 # ── Feature computation ────────────────────────────────────────────────────────
 
-def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain  = delta.clip(lower=0)
-    loss  = (-delta).clip(lower=0)
-    # Wilder's smoothing (equivalent to EWM with alpha=1/period, adjust=False)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
-
-
 def compute_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add feature columns to a single-ticker OHLCV DataFrame."""
+    """Add all 15 feature columns to a single-ticker OHLCV DataFrame."""
     df = df.copy()
-    df["ret_1d"]    = df["close"].pct_change(1)
-    df["ret_5d"]    = df["close"].pct_change(5)
-    df["rsi_14"]    = _rsi(df["close"], 14)
-    df["sma_20"]    = df["close"].rolling(20).mean()
-    df["sma_ratio"] = df["close"] / df["sma_20"]
-    df["vol_20d"]   = df["ret_1d"].rolling(20).std()
-    df["avg_vol_20"]= df["volume"].rolling(20).mean()
-    df["vol_ratio"] = df["volume"] / df["avg_vol_20"]
-    # Drop helper columns
-    df = df.drop(columns=["sma_20", "avg_vol_20"])
-    # Drop rows with NaN features (warmup period)
+
+    # ── 1–5: price / return features ──────────────────────────────────────────
+    df["ret_1d"]     = df["close"].pct_change(1)
+    df["ret_5d"]     = df["close"].pct_change(5)
+    sma20            = df["close"].rolling(20).mean()
+    df["sma_ratio"]  = df["close"] / sma20
+    df["vol_20d"]    = df["ret_1d"].rolling(20).std()
+    avg_vol20        = df["volume"].rolling(20).mean()
+    df["vol_ratio"]  = df["volume"] / avg_vol20
+
+    # ── 6: RSI (14) ───────────────────────────────────────────────────────────
+    df["rsi_14"] = ta.momentum.RSIIndicator(
+        close=df["close"], window=14
+    ).rsi()
+
+    # ── 7: MACD histogram (normalised by close to be scale-free) ─────────────
+    macd = ta.trend.MACD(
+        close=df["close"], window_slow=26, window_fast=12, window_sign=9
+    )
+    df["macd_hist"] = macd.macd_diff() / df["close"]
+
+    # ── 10–11: Bollinger Bands ────────────────────────────────────────────────
+    bb = ta.volatility.BollingerBands(
+        close=df["close"], window=20, window_dev=2
+    )
+    df["bb_width"] = bb.bollinger_wband()   # (upper - lower) / mid
+
+    # ── 12: On-Balance Volume — 1-day % change (stationary) ──────────────────
+    obv            = ta.volume.OnBalanceVolumeIndicator(
+        close=df["close"], volume=df["volume"]
+    ).on_balance_volume()
+    df["obv_ret"]  = obv.pct_change(1).replace([np.inf, -np.inf], np.nan)
+
+    # ── 13–14: ADX + directional bias ────────────────────────────────────────
+    adx_ind         = ta.trend.ADXIndicator(
+        high=df["high"], low=df["low"], close=df["close"], window=14
+    )
+    df["adx"]        = adx_ind.adx()
+    df["adx_di_diff"]= (adx_ind.adx_pos() - adx_ind.adx_neg()) / 100.0
+
+    # ── NEW features ─────────────────────────────────────────────────────────────
+    sma200           = df['close'].rolling(200).mean()
+    df['sma_200_dist']= df['close'] / sma200 - 1          # long-horizon regime: + = above MA
+
+    df['drawdown_60d']= df['close'] / df['close'].rolling(60).max() - 1   # <=0, how far from 60d peak
+
+    vol_60d           = df['ret_1d'].rolling(60).std()
+    df['vol_regime']  = df['vol_20d'] / vol_60d            # >1 = vol expanding, <1 = contracting
+
+    df['ret_20d']     = df['close'].pct_change(20)
+
+    # Drop helper intermediates
     df = df.dropna(subset=FEATURE_COLS).reset_index(drop=True)
     return df
 

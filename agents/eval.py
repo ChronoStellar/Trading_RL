@@ -7,11 +7,18 @@ Usage:
     python agents/eval.py --split val
     python agents/eval.py --ticker QQQ --split test
     python agents/eval.py --split test --no-plot
+    python agents/eval.py --no-save                # skip writing files
+
+Outputs (saved to agents/eval_results/ by default):
+    <TICKER>_<SPLIT>_<TIMESTAMP>.json   — metrics for agent + buy-and-hold
+    <TICKER>_<SPLIT>_<TIMESTAMP>.csv    — step-by-step episode trajectory
 """
 
 import argparse
+import json
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -23,6 +30,7 @@ from env.train_env import TradingEnv, INITIAL_CASH, FEATURE_COLS
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 PROC_DIR   = os.path.join(os.path.dirname(__file__), "..", "data", "processed")
+EVAL_DIR   = os.path.join(os.path.dirname(__file__), "eval_results")
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -58,7 +66,6 @@ def run_episode(model: PPO, env: TradingEnv) -> pd.DataFrame:
     env._start_idx    = 0
     env._current_step = 0
     env._position     = 0.0
-    env._entry_price  = float(env._close[0])
     env._portfolio_val= INITIAL_CASH
     env._ret_history  = []
 
@@ -93,42 +100,96 @@ def build_bnh(df: pd.DataFrame, ticker: str, split: str) -> np.ndarray:
 
 # ── Reporting ─────────────────────────────────────────────────────────────────
 
-def print_metrics(label: str, portfolio: np.ndarray) -> None:
-    returns = np.diff(portfolio) / portfolio[:-1]
-    print(f"\n{'─'*40}")
-    print(f"  {label}")
-    print(f"{'─'*40}")
-    print(f"  Total Return  : {total_return(portfolio):+.2%}")
-    print(f"  Sharpe Ratio  : {sharpe(returns):+.3f}")
-    print(f"  Max Drawdown  : {max_drawdown(portfolio):.2%}")
-    print(f"  Win Rate      : {win_rate(returns):.2%}")
-    print(f"  Avg Position  : {None}")  # filled below
-
-
-def report(df: pd.DataFrame, bnh: np.ndarray, ticker: str, split: str) -> None:
+def collect_metrics(
+    df: pd.DataFrame,
+    bnh: np.ndarray,
+    ticker: str,
+    split: str,
+) -> dict:
+    """Build a serialisable metrics dict for both agent and buy-and-hold."""
     agent_portfolio = df["portfolio_value"].to_numpy()
     agent_returns   = np.diff(agent_portfolio) / agent_portfolio[:-1]
     bnh_returns     = np.diff(bnh) / bnh[:-1]
 
-    header = f"\n{'='*40}\n  Eval: {ticker} | {split.upper()} split\n{'='*40}"
-    print(header)
+    return {
+        "run_at":  datetime.now().isoformat(timespec="seconds"),
+        "ticker":  ticker,
+        "split":   split,
+        "n_steps": len(df),
+        "agent": {
+            "total_return":  round(total_return(agent_portfolio), 6),
+            "sharpe_ratio":  round(sharpe(agent_returns), 6),
+            "max_drawdown":  round(max_drawdown(agent_portfolio), 6),
+            "win_rate":      round(win_rate(agent_returns), 6),
+            "avg_position":  round(float(df["position"].mean()), 6),
+            "final_value":   round(float(agent_portfolio[-1]), 2),
+        },
+        "buy_and_hold": {
+            "total_return": round(total_return(bnh), 6),
+            "sharpe_ratio": round(sharpe(bnh_returns), 6),
+            "max_drawdown": round(max_drawdown(bnh), 6),
+            "win_rate":     round(win_rate(bnh_returns), 6),
+            "avg_position": 1.0,
+            "final_value":  round(float(bnh[-1]), 2),
+        },
+        "outperformance": {
+            "return": round(total_return(agent_portfolio) - total_return(bnh), 6),
+            "sharpe": round(sharpe(agent_returns) - sharpe(bnh_returns), 6),
+            "drawdown_improvement": round(
+                abs(max_drawdown(bnh)) - abs(max_drawdown(agent_portfolio)), 6
+            ),
+        },
+    }
 
-    # Agent
-    print(f"\n--- PPO Agent ---")
-    print(f"  Total Return  : {total_return(agent_portfolio):+.2%}")
-    print(f"  Sharpe Ratio  : {sharpe(agent_returns):+.3f}")
-    print(f"  Max Drawdown  : {max_drawdown(agent_portfolio):.2%}")
-    print(f"  Win Rate      : {win_rate(agent_returns):.2%}")
-    print(f"  Avg Position  : {df['position'].mean():.2%}")
 
-    # Buy-and-hold
-    print(f"\n--- Buy & Hold ---")
-    print(f"  Total Return  : {total_return(bnh):+.2%}")
-    print(f"  Sharpe Ratio  : {sharpe(bnh_returns):+.3f}")
-    print(f"  Max Drawdown  : {max_drawdown(bnh):.2%}")
-    print(f"  Win Rate      : {win_rate(bnh_returns):.2%}")
-    print(f"  Avg Position  : 100.00%")
+def report(df: pd.DataFrame, bnh: np.ndarray, ticker: str, split: str) -> dict:
+    """Print metrics to stdout and return the metrics dict."""
+    m = collect_metrics(df, bnh, ticker, split)
+    a = m["agent"]
+    b = m["buy_and_hold"]
+    o = m["outperformance"]
+
+    print(f"\n{'='*44}")
+    print(f"  Eval: {ticker} | {split.upper()} split  ({m['n_steps']} steps)")
+    print(f"{'='*44}")
+
+    print(f"\n{'Metric':<22} {'PPO Agent':>12} {'Buy & Hold':>12}")
+    print(f"{'─'*46}")
+    print(f"{'Total Return':<22} {a['total_return']:>+11.2%}  {b['total_return']:>+11.2%}")
+    print(f"{'Sharpe Ratio':<22} {a['sharpe_ratio']:>+11.3f}  {b['sharpe_ratio']:>+11.3f}")
+    print(f"{'Max Drawdown':<22} {a['max_drawdown']:>+11.2%}  {b['max_drawdown']:>+11.2%}")
+    print(f"{'Win Rate':<22} {a['win_rate']:>+11.2%}  {b['win_rate']:>+11.2%}")
+    print(f"{'Avg Position':<22} {a['avg_position']:>+11.2%}  {b['avg_position']:>+11.2%}")
+    print(f"{'Final Value ($)':<22} {a['final_value']:>11,.2f}  {b['final_value']:>11,.2f}")
+
+    print(f"\n{'─'*46}")
+    print(f"  Outperformance — Return : {o['return']:>+.2%}")
+    print(f"  Outperformance — Sharpe : {o['sharpe']:>+.3f}")
+    print(f"  Drawdown Improvement    : {o['drawdown_improvement']:>+.2%}")
     print()
+
+    return m
+
+
+def save_results(
+    metrics: dict,
+    df: pd.DataFrame,
+    ticker: str,
+    split: str,
+) -> None:
+    """Save metrics JSON + episode trajectory CSV to agents/eval_results/."""
+    os.makedirs(EVAL_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = f"{ticker}_{split}_{ts}"
+
+    json_path = os.path.join(EVAL_DIR, f"{stem}.json")
+    with open(json_path, "w") as f:
+        json.dump(metrics, f, indent=2)
+    print(f"Metrics saved  → {json_path}")
+
+    csv_path = os.path.join(EVAL_DIR, f"{stem}.csv")
+    df.to_csv(csv_path, index=False)
+    print(f"Trajectory saved → {csv_path}")
 
 
 def plot_results(df: pd.DataFrame, bnh: np.ndarray, ticker: str, split: str) -> None:
@@ -168,10 +229,12 @@ def evaluate(args: argparse.Namespace) -> None:
     model = PPO.load(model_path)
     env   = TradingEnv(ticker=args.ticker, split=args.split)
 
-    df  = run_episode(model, env)
-    bnh = build_bnh(df, args.ticker, args.split)
+    df      = run_episode(model, env)
+    bnh     = build_bnh(df, args.ticker, args.split)
+    metrics = report(df, bnh, args.ticker, args.split)
 
-    report(df, bnh, args.ticker, args.split)
+    if not args.no_save:
+        save_results(metrics, df, args.ticker, args.split)
 
     if not args.no_plot:
         plot_results(df, bnh, args.ticker, args.split)
@@ -182,6 +245,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ticker",   default="SPY",  choices=["SPY", "QQQ", "IWM"])
     p.add_argument("--split",    default="test", choices=["train", "val", "test"])
     p.add_argument("--no-plot",  action="store_true")
+    p.add_argument("--no-save",  action="store_true", help="Skip writing JSON/CSV to eval_results/")
     return p.parse_args()
 
 

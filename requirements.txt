@@ -1,0 +1,12 @@
+stable-baselines3 
+sb3-contrib
+yfinance 
+coremltools 
+gymnasium
+numpy
+ta
+statsmodels
+tabulate
+optuna
+
+git+https://github.com/AI4Finance-Foundation/FinRL.git

@@ -139,7 +139,7 @@ def export(obs_dim: int, model_name: str = "ppo_spy") -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Export PPO actor to CoreML")
-    p.add_argument("--obs-dim",    type=int, default=8,       help="Observation vector length")
+    p.add_argument("--obs-dim",    type=int, default=10,      help="Observation vector length")
     p.add_argument("--model-name", type=str, default="ppo_spy", help="Basename in agents/models/")
     return p.parse_args()
 

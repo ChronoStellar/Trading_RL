@@ -17,7 +17,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
-.claude/
+CLAUDE.md
 
 # ----------------------------
 # Logs & runtime files
@@ -25,6 +25,8 @@ Thumbs.db
 logs/
 *.log
 agents/backtest_results/
+agents/eval_results/
+agents/tune_results/
 
 # ----------------------------
 # Archives & packaged files
@@ -104,5 +106,3 @@ coverage/
 .cache/
 tmp/
 temp/
-
-test.ipynb
